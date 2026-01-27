@@ -5,41 +5,21 @@ import re
 import requests
 import math
 import matplotlib.pyplot as plt
+import os
 
 # ===============================
 # CONFIG
 # ===============================
 
 PING_COUNT = 10
+PING_INTERVAL = 0.2 # time between two consecutive pings
+DEBUG = False
 
-IP_LIST = [
-    "160.242.19.254",          # Luanda, AO
-    "41.110.39.130",           # Algiers, DZ
-    "213.158.175.240",         # Cairo, EG
-    "102.214.66.39",           # Accra, GH
-    "102.214.66.19",           # Accra, GH
-    "212.60.92.134",           # Banjul, GM
-    "105.235.237.2",           # Bata, GQ
-    "speed.mymanga.pro",       # Nairobi, KE
-    "speedtestfl.telecom.mu",  # Floreal, MU
-    "speedtest.telecom.mu",    # Port Louis, MU
-    "41.226.22.119",           # Tunis, TN
-    "41.210.185.162",          # Kampala, UG
-    "169.150.238.161",         # Johannesburg, ZA
-    "69.48.239.124",           # Johannesburg, ZA (FortiSASE)
-    "86.96.154.106",           # Dubai, AE
-    "23.249.55.42",            # Dubai, AE (FortiSASE)
-    "69.48.238.200",           # Dubai, AE (FortiSASE)
-    "84.17.57.129",            # Hong Kong, HK
-    "23.249.58.14",            # Hong Kong, HK (FortiSASE)
-    "speedtest.hkg12.hk.leaseweb.net",  # Hong Kong, HK
-    "iperf.scbd.net.id",       # Curug, ID
-    "103.185.255.183",         # Jakarta, ID
-    "speed.netfiber.net.il",   # Jerusalem, IL
-    "speed.rimon.net.il",      # Jerusalem, IL
-    "169.150.202.193"          # (Asia, provider unspecified)
-]
+os.makedirs("plots", exist_ok=True)
 
+def load_ips(filename="ips.txt"):
+    with open(filename, "r") as f:
+        return [line.strip() for line in f if line.strip()]
 
 # ===============================
 # PING FUNCTION
@@ -50,10 +30,12 @@ def ping_ip(ip):
     Returns (min_rtt, avg_rtt, max_rtt) in ms
     """
     try:
+
         result = subprocess.run(
             ["ping", "-c", str(PING_COUNT), ip],
             capture_output=True,
-            text=True
+            text=True,
+            timeout=20
         )
 
         output = result.stdout
@@ -88,6 +70,10 @@ def get_location(ip):
 
     return None, None
 
+def get_my_public_ip():
+    r = requests.get("https://ipinfo.io/ip", timeout=5)
+    return r.text.strip()
+
 # ===============================
 # HAVERSINE DISTANCE
 # ===============================
@@ -102,24 +88,54 @@ def haversine(lat1, lon1, lat2, lon2):
     return 2 * R * math.asin(math.sqrt(a))
 
 # ===============================
+# PLOT
+# ===============================
+
+def save_scatter(x, y, xlabel, ylabel, title, filename):
+    plt.figure()
+    plt.scatter(x, y)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True)
+    plt.savefig(filename)
+    plt.close()
+
+
+# ===============================
 # MAIN
 # ===============================
 
 def main():
-    results = []
+    IP_LIST = load_ips()
 
     print("Determining your own location...")
-    my_lat, my_lon = get_location("")
+    my_ip = get_my_public_ip() 
+    my_lat, my_lon = get_location(my_ip)
+
+    if DEBUG:
+        print("MY IP:", my_ip)
+        print(f"My lat and lon: {my_lat}, {my_lon}")
 
     if my_lat is None:
         print("Failed to get your own location.")
         return
+
+    # add our IP address to the IP list
+    if my_ip:
+        IP_LIST = [my_ip] + IP_LIST
+
+    results = []
 
     for ip in IP_LIST:
         print(f"\nProcessing {ip}")
 
         min_rtt, avg_rtt, max_rtt = ping_ip(ip)
         lat, lon = get_location(ip)
+
+        if DEBUG:
+            print(f"Min RTT: {min_rtt}, Avg RTT: {avg_rtt}, Max RTT: {max_rtt}")
+            print(f"Lat: {lat}, Lon: {lon}")
 
         if None in (min_rtt, avg_rtt, max_rtt, lat, lon):
             print(f"Skipping {ip}")
@@ -143,14 +159,31 @@ def main():
     # ===============================
 
     distances = [r["distance"] for r in results]
+    
+    min_rtts = [r["min_rtt"] for r in results]
     avg_rtts = [r["avg_rtt"] for r in results]
+    max_rtts = [r["max_rtt"] for r in results]
 
-    plt.scatter(distances, avg_rtts)
-    plt.xlabel("Geographical Distance (km)")
-    plt.ylabel("Average RTT (ms)")
-    plt.title("Distance vs RTT")
-    plt.grid(True)
-    plt.show()
+    save_scatter(
+        distances, min_rtts,
+        "Geographical Distance (km)", "Min RTT (ms)",
+        "Distance vs Minimum RTT",
+        "plots/distance_vs_min_rtt.pdf"
+    )
+
+    save_scatter(
+        distances, avg_rtts,
+        "Geographical Distance (km)", "Average RTT (ms)",
+        "Distance vs Average RTT",
+        "plots/distance_vs_avg_rtt.pdf"
+    )
+
+    save_scatter(
+        distances, max_rtts,
+        "Geographical Distance (km)", "Max RTT (ms)",
+        "Distance vs Maximum RTT",
+        "plots/distance_vs_max_rtt.pdf"
+    )
 
 if __name__ == "__main__":
     main()
