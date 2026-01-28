@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-
+pip install -r requirements.txt
 echo "Running Question 1 (Ping + Distance vs RTT)..."
 python3 question1.py
 
