@@ -131,8 +131,11 @@ def main():
         print(f"\nProcessing {ip}")
 
         min_rtt, avg_rtt, max_rtt = ping_ip(ip)
-        lat, lon = get_location(ip)
-
+        if ip == my_ip:
+            lat, lon = my_lat, my_lon
+        else:
+            lat, lon = get_location(ip)
+            
         if DEBUG:
             print(f"Min RTT: {min_rtt}, Avg RTT: {avg_rtt}, Max RTT: {max_rtt}")
             print(f"Lat: {lat}, Lon: {lon}")
