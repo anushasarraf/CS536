@@ -5,6 +5,7 @@ import random
 import re
 import matplotlib.pyplot as plt
 import os
+import warnings
 from question1 import load_ips
 
 # -------------------------
@@ -16,25 +17,27 @@ MAX_HOPS = 30
 
 os.makedirs("plots", exist_ok=True)
 
+# Suppress non-critical matplotlib warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
 # -------------------------
 # TRACEROUTE
 # -------------------------
 
 def run_traceroute(ip):
-    cmd = ["traceroute", "-I", "-m", str(MAX_HOPS), ip]
+    print(f" Running traceroute to destination: {ip}")
+    cmd = ["traceroute", "-m", str(MAX_HOPS), ip]
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.stdout
 
 def parse_traceroute(output):
     hops = []
     for line in output.splitlines():
-        # Example line:
-        #  3  10.10.0.1  12.1 ms  12.3 ms  12.2 ms
         rtts = re.findall(r"([\d\.]+)\s+ms", line)
         if rtts:
-            # use average RTT for this hop
             avg_rtt = sum(map(float, rtts)) / len(rtts)
             hops.append(avg_rtt)
+    print(f" Extracted {len(hops)} hops with RTT measurements")
     return hops
 
 # -------------------------
@@ -42,30 +45,37 @@ def parse_traceroute(output):
 # -------------------------
 
 def main():
+    print(" Loading IP address list")
     ips = load_ips()
+
+    print(f" Randomly selecting {N_TARGETS} target destinations")
     targets = random.sample(ips, N_TARGETS)
 
     hop_data = {}
     hop_counts = []
     final_rtts = []
 
+    print(" Starting traceroute measurements\n")
+
     for ip in targets:
-        print(f"Tracing {ip}")
         out = run_traceroute(ip)
-        # hops is a list for hop times from source to destination
         hops = parse_traceroute(out)
 
         hop_data[ip] = hops
         hop_counts.append(len(hops))
         final_rtts.append(hops[-1] if hops else None)
+        print(" Per-hop RTTs (average per hop):")
+        for i, rtt in enumerate(hops, start=1):
+            print(f"   Hop {i:2d}: {rtt:.2f} ms")
 
-    # print("hop counts:", hop_counts)
+        # print(f" Final RTT for {ip}: {hops[-1] if hops else 'N/A'} ms\n")
 
     # -------------------------
     # STACKED BAR PLOT
     # -------------------------
 
-    # hop numbers can be different for different destinations
+    print(" Computing per-hop incremental latency values")
+
     max_len = max(len(h) for h in hop_data.values())
     padded = []
 
@@ -73,24 +83,22 @@ def main():
         single_hop_times = []
         prev = 0
         for rtt in hops:
-            single_hop_times.append(max(0, rtt - prev)) # hop time cannot be negative
+            single_hop_times.append(max(0, rtt - prev))
             prev = rtt
 
-        # to make the list lengths same for plotting, we pad the remaining elements with 0
         single_hop_times += [0] * (max_len - len(single_hop_times))
         padded.append(single_hop_times)
 
     bottoms = [0] * N_TARGETS
-    labels = list(hop_data.keys()) # IP addresses
+    labels = list(hop_data.keys())
+
+    print(" Generating stacked bar plot for hop-by-hop latency breakdown")
 
     plt.figure(figsize=(10, 5))
 
     for i in range(max_len):
         vals = [padded[j][i] for j in range(N_TARGETS)]
-
         plt.bar(labels, vals, bottom=bottoms)
-
-        # for stacking the values vertically, we update the bottoms by adding the previous hop times
         bottoms = [bottoms[j] + vals[j] for j in range(N_TARGETS)]
 
     plt.ylim(top=max(bottoms) * 1.1)
@@ -106,6 +114,8 @@ def main():
     # SCATTER PLOT
     # -------------------------
 
+    print(" Generating scatter plot: hop count vs final RTT")
+
     plt.figure()
     plt.scatter(hop_counts, final_rtts)
     plt.xlabel("Hop count")
@@ -115,7 +125,10 @@ def main():
     plt.savefig("plots/q2_hopcount_vs_rtt.pdf")
     plt.close()
 
-    print("Saved q2_stacked_latency.pdf and q2_hopcount_vs_rtt.pdf")
+    print("\n Saved output plots:")
+    print("  - plots/q2_stacked_latency.pdf")
+    print("  - plots/q2_hopcount_vs_rtt.pdf")
+    print(" Question 2 execution completed successfully")
 
 if __name__ == "__main__":
     main()
