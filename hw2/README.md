@@ -2,16 +2,16 @@
 
 ## Overview
 
-A from-scratch Python TCP client that implements the **iperf3 wire protocol** and connects to public iperf3 servers, measures goodput using `TCP_INFO`, and generates plots + a summary table.
+A from-scratch Python TCP client that implements the **iperf3 protocol** and connects to public iperf3 servers, measures goodput using `TCP_INFO`, and generates plots and a summary table.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `iperf3_client.py` | Main client — protocol, measurement, plotting |
-| `servers.txt` | Optional hand-curated server list |
+| `servers.txt` | Server list from https://iperf3serverlist.net/|
 | `run_experiment.sh` | One-shot experiment runner |
-| `Dockerfile` | Containerised environment (Ubuntu 24.04) |
+| `Dockerfile` | Containerized environment (Ubuntu 24.04) |
 
 ---
 
@@ -29,22 +29,21 @@ python3 iperf3_client.py --servers servers.txt --n 10 --duration 20
 # Custom output directory
 python3 iperf3_client.py --n 5 --outdir my_results/
 ```
-
-### With Docker (recommended)
-
-```bash
 # Build
 docker build -t cs536-part1 .
 
-# Run (mounts results out to host)
-docker run --rm -v $(pwd)/results:/app/results cs536-part1 --n 10 --duration 20
+# Run with defaults (n=10, duration=20s, interval=1s, servers.txt baked in)
+docker run --rm -v $(pwd)/results:/app/results cs536-part1
 
-# With a server file
+# Override parameters
+docker run --rm -v $(pwd)/results:/app/results cs536-part1 \
+  --n 5 --duration 30 --interval 1
+
+# Custom server file
 docker run --rm \
   -v $(pwd)/results:/app/results \
-  -v $(pwd)/servers.txt:/app/servers.txt \
-  cs536-part1 --servers /app/servers.txt --n 10 --duration 20
-```
+  -v $(pwd)/my_servers.txt:/app/servers.txt \
+  cs536-part1 --n 10 --duration 20
 
 > **Requirement**: Must run on Linux or Windows WSL2 (real Linux kernel needed for `TCP_INFO`).
 

@@ -18,6 +18,7 @@ import csv
 import sys
 import os
 import ctypes
+from datetime import datetime
 
 # ── iperf3 protocol state constants ──────────────────────────────────────────
 TEST_START       = 1
@@ -428,8 +429,11 @@ def main():
     parser.add_argument('--duration', type=int,   default=20,      help='Test duration per server (s)')
     parser.add_argument('--interval', type=float, default=1.0,     help='Sampling interval (s)')
     parser.add_argument('--servers',  type=str,   default=None,    help='servers.txt file path')
-    parser.add_argument('--outdir',   type=str,   default='results',help='Output directory')
+    parser.add_argument('--outdir',   type=str,   default=None, help='Output directory')
     args = parser.parse_args()
+
+    if args.outdir is None:
+        args.outdir = f"results/results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     os.makedirs(args.outdir, exist_ok=True)
 

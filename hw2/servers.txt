@@ -1,6 +1,5 @@
-# iperf3 public server list from iperf3serverlist.net
-# Format: IP/hostname,port_or_range
-# Port range (e.g. 9201-9240) means pick a random port in that range
+# iperf3 server list — sourced from https://iperf3serverlist.net/
+# Format: host,port (port can be a range like 9201-9240)
 
 # Africa
 160.242.19.254,9201-9240
@@ -17,10 +16,52 @@ speedtest.telecom.mu,5201-5209
 41.210.185.162,5201
 169.150.238.161,5201
 69.48.239.124,30000
-86.96.154.106,7007-7013
 
 # Asia
+86.96.154.106,7007-7013
 23.249.55.42,30000
 69.48.238.200,30000
 84.17.57.129,5201
 23.249.58.14,30000
+speedtest.hkg12.hk.leaseweb.net,5201-5210
+iperf.scbd.net.id,5201-5209
+169.150.202.193,5201
+speed.netfiber.net.il,5201
+speed.rimon.net.il,5201
+23.249.61.122,30000
+69.48.236.198,30000
+89.187.160.1,5201
+23.249.60.154,30000
+66.35.31.81,30000
+speedtest.tyo11.jp.leaseweb.net,5201-5210
+89.187.162.1,5201
+96.45.38.22,30000
+speedtest.sin1.sg.leaseweb.net,5201-5210
+sgp.proof.ovh.net,5201-5210
+speedtest.singnet.com.sg,5201-5210
+156.146.52.1,5201
+69.48.237.66,30000
+speedtest.uztelecom.uz,5200-5209
+
+# Europe
+185.180.12.40,5201
+lg.vie.alwyzon.net,5201-5203
+207.211.214.65,5201
+37.19.203.1,5201
+t5.cscs.ch,5201-5203
+89.187.165.1,5201
+speedtest.init7.net,5201-5204
+212.60.47.34,9201-9209
+speedtest.shinternet.ch,5200-5209
+speedtest.iway.ch,5201
+185.152.65.113,5201
+85.163.71.241,5201
+fra.speedtest.clouvider.net,5200-5209
+185.102.219.93,5201
+178.215.228.109,9205-9239
+96.45.39.38,30000
+spd-desrv.hostkey.com,5201-5209
+speedtest.ip-projects.de,5201
+speedtest.fra1.de.leaseweb.net,5201-5210
+a209.speedtest.wobcom.de,5201
+a110.speedtest.wobcom.de,5201

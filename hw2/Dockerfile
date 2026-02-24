@@ -1,6 +1,7 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y \
     python3 \
@@ -15,10 +16,6 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY iperf3_client.py /app/
-COPY run_experiment.sh /app/
-
-RUN chmod +x /app/run_experiment.sh
-
-# Default: run the full experiment
+COPY servers.txt /app/
 ENTRYPOINT ["python3", "/app/iperf3_client.py"]
-CMD ["--n", "10", "--duration", "20"]
+CMD ["--n", "10", "--duration", "20", "--interval", "1", "--servers", "/app/servers.txt"]
