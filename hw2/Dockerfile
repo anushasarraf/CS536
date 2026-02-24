@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY iperf3_client.py /app/
+COPY plot_tcp_stats.py /app/
 COPY servers.txt /app/
+
 ENTRYPOINT ["python3", "/app/iperf3_client.py"]
 CMD ["--n", "10", "--duration", "20", "--interval", "1", "--servers", "/app/servers.txt"]

@@ -383,7 +383,7 @@ def make_plots(all_samples, outdir):
     ax.set_title("Goodput Time Series — All Destinations")
     ax.legend(fontsize=7, ncol=2); ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    p1 = os.path.join(outdir, "goodput_timeseries.pdf")
+    p1 = os.path.join(outdir, "q1_goodput_timeseries.pdf")
     fig.savefig(p1); plt.close(fig); print(f"Saved: {p1}")
 
     # Summary table
@@ -401,7 +401,7 @@ def make_plots(all_samples, outdir):
     tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.4)
     ax.set_title("Goodput Summary Table", fontsize=12, pad=12)
     fig.tight_layout()
-    p2 = os.path.join(outdir, "goodput_summary_table.pdf")
+    p2 = os.path.join(outdir, "q1_goodput_summary_table.pdf")
     fig.savefig(p2); plt.close(fig); print(f"Saved: {p2}")
 
 
@@ -476,9 +476,10 @@ def main():
             break
 
     if all_samples:
-        save_csv(all_samples, os.path.join(args.outdir, "goodput_samples.csv"))
+        save_csv(all_samples, os.path.join(args.outdir, "q2_goodput_samples.csv"))
         print_summary(all_samples)
         make_plots(all_samples, args.outdir)
+        os.system(f"python3 /app/plot_tcp_stats.py --csv {os.path.join(args.outdir, 'q2_goodput_samples.csv')} --outdir {args.outdir}")
     else:
         print("\nNo data collected.")
 
