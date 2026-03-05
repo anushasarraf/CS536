@@ -1,0 +1,17 @@
+# object files
+*.o
+
+# kernel module
+*.ko
+
+# kernel module build files
+*.mod
+*.mod.c
+*.mod.o
+
+# kernel build metadata
+Module.symvers
+modules.order
+
+# kernel build command files
+*.cmd
