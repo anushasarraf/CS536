@@ -3,7 +3,7 @@
 CS 536 Assignment 2 - Part 1: iPerf Throughput Application
 
 Usage:
-    python3 iperf3_client.py [--n N] [--duration D] [--interval I] [--servers FILE] [--outdir DIR]
+    python3 iperf3_client.py [--n N] [--duration D] [--interval I] [--servers FILE] [--outdir DIR] [--cc CC]
 """
 
 import socket
@@ -38,6 +38,7 @@ SERVER_ERROR     = 254
 COOKIE_SIZE = 37
 BLKSIZE     = 128 * 1024   # 128 KB (iperf3 default)
 TCP_INFO    = 11            # SOL_TCP / TCP_INFO optname (Linux)
+TCP_CONGESTION = getattr(socket, "TCP_CONGESTION", 13)
 
 # ── TCP_INFO struct (Linux) ───────────────────────────────────────────────────
 class TcpInfo(ctypes.Structure):
@@ -98,6 +99,29 @@ def get_tcp_info(sock):
         return None
 
 
+def get_socket_cc(sock):
+    try:
+        raw = sock.getsockopt(socket.IPPROTO_TCP, TCP_CONGESTION, 32)
+        if isinstance(raw, bytes):
+            return raw.split(b"\0", 1)[0].decode("ascii", errors="ignore")
+        return str(raw)
+    except Exception:
+        return None
+
+
+def set_socket_cc(sock, cc_name, server_label, channel):
+    if not cc_name:
+        return True
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, TCP_CONGESTION, cc_name.encode("ascii"))
+        effective = get_socket_cc(sock) or "unknown"
+        print(f"  [{server_label}] {channel} CC={effective}")
+        return True
+    except Exception as e:
+        print(f"  [{server_label}] Failed to set {channel} CC='{cc_name}': {e}")
+        return False
+
+
 # ── Cookie / helpers ──────────────────────────────────────────────────────────
 def make_cookie():
     chars = string.ascii_lowercase + string.digits
@@ -145,7 +169,7 @@ def _recvall(sock, n):
 
 
 # ── Main iperf3 test ──────────────────────────────────────────────────────────
-def run_iperf3_test(host, port, duration, interval, results_list, server_label):
+def run_iperf3_test(host, port, duration, interval, results_list, server_label, cc_name=None):
     cookie    = make_cookie()
     ctrl_sock = None
     data_sock = None
@@ -153,6 +177,8 @@ def run_iperf3_test(host, port, duration, interval, results_list, server_label):
     try:
         # 1. Control connection + cookie
         ctrl_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if not set_socket_cc(ctrl_sock, cc_name, server_label, "control socket"):
+            return False
         ctrl_sock.settimeout(10.0)
         ctrl_sock.connect((host, port))
         ctrl_sock.sendall(cookie)
@@ -183,10 +209,14 @@ def run_iperf3_test(host, port, duration, interval, results_list, server_label):
 
         # 4. Open data connection + send cookie
         data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if not set_socket_cc(data_sock, cc_name, server_label, "data socket"):
+            return False
         data_sock.settimeout(10.0)
         data_sock.connect((host, port))
         data_sock.sendall(cookie)
         data_sock.settimeout(None)
+        active_cc = get_socket_cc(data_sock) or "unknown"
+        print(f"  [{server_label}] Active data CC: {active_cc}")
 
         # 5. TEST_START + TEST_RUNNING
         state = ctrl_recv_state(ctrl_sock, timeout=10.0)
@@ -256,6 +286,7 @@ def run_iperf3_test(host, port, duration, interval, results_list, server_label):
                         "pacing_rate":   info.tcpi_pacing_rate,
                         "delivery_rate": info.tcpi_delivery_rate,
                         "snd_ssthresh":  info.tcpi_snd_ssthresh,
+                        "cc_algo":       active_cc,
                     })
                 prev_sample_time = now
 
@@ -430,6 +461,7 @@ def main():
     parser.add_argument('--interval', type=float, default=1.0,     help='Sampling interval (s)')
     parser.add_argument('--servers',  type=str,   default=None,    help='servers.txt file path')
     parser.add_argument('--outdir',   type=str,   default=None, help='Output directory')
+    parser.add_argument('--cc',       type=str,   default=None,    help='TCP congestion control algorithm (e.g., cubic, bbr, mycc)')
     args = parser.parse_args()
 
     if args.outdir is None:
@@ -449,7 +481,8 @@ def main():
 
     random.shuffle(candidates)
 
-    print(f"\nStarting tests: n={args.n}, duration={args.duration}s, interval={args.interval}s\n")
+    cc_label = args.cc if args.cc else "system-default"
+    print(f"\nStarting tests: n={args.n}, duration={args.duration}s, interval={args.interval}s, cc={cc_label}\n")
 
     all_samples = []
     tested = 0
@@ -463,7 +496,7 @@ def main():
 
         server_samples = []
         success = run_iperf3_test(host, port, args.duration,
-                                  args.interval, server_samples, label)
+                                  args.interval, server_samples, label, args.cc)
 
         if success and server_samples:
             all_samples.extend(server_samples)
@@ -479,7 +512,11 @@ def main():
         save_csv(all_samples, os.path.join(args.outdir, "q2_goodput_samples.csv"))
         print_summary(all_samples)
         make_plots(all_samples, args.outdir)
-        os.system(f"python3 /app/plot_tcp_stats.py --csv {os.path.join(args.outdir, 'q2_goodput_samples.csv')} --outdir {args.outdir}")
+        plot_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plot_tcp_stats.py")
+        if os.path.exists(plot_script):
+            os.system(f"python3 {plot_script} --csv {os.path.join(args.outdir, 'q2_goodput_samples.csv')} --outdir {args.outdir}")
+        else:
+            print("plot_tcp_stats.py not found — skipping extra plots")
     else:
         print("\nNo data collected.")
 
