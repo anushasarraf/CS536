@@ -30,7 +30,7 @@ docker run --rm -v $(pwd)/results:/app/results cs536-hw2
 
 # Override parameters
 docker run --rm -v $(pwd)/results:/app/results cs536-hw2 \
-  --n 5 --duration 30 --interval 1
+  --n 5 --duration 30 --interval 1 --cc cubic
 
 ```
 
@@ -39,6 +39,9 @@ docker run --rm -v $(pwd)/results:/app/results cs536-hw2 \
 ```bash
 # Run full experiment (Q1 + Q2 plots generated automatically)
 python3 iperf3_client.py --servers servers.txt --n 10 --duration 20 --interval 1
+
+# Run with a specific congestion control (per-socket)
+python3 iperf3_client.py --servers servers.txt --n 10 --duration 20 --interval 1 --cc mycc
 
 # Generate Q2 plots separately (if needed)
 python3 plot_tcp_stats.py --csv results/results_YYYYMMDD_HHMMSS/goodput_samples.csv
@@ -63,6 +66,7 @@ python3 plot_tcp_stats.py --csv results/results_YYYYMMDD_HHMMSS/goodput_samples.
 | `--interval` | 1.0 | Goodput sampling interval (seconds) |
 | `--servers` | (built-in list) | Path to server list file |
 | `--outdir` | `results/results_YYYYMMDD_HHMMSS/` | Output directory |
+| `--cc` | (system default) | TCP congestion control algorithm (e.g., `cubic`, `bbr`, `mycc`) |
 
 ### `plot_tcp_stats.py`
 
@@ -97,7 +101,7 @@ After running, the timestamped output directory contains:
 ```
 server, timestamp, elapsed_s, goodput_bps, goodput_mbps, bytes_acked,
 snd_cwnd, rtt_us, rtt_ms, rttvar_us, retransmits, total_retrans,
-lost, pacing_rate, delivery_rate, snd_ssthresh
+lost, pacing_rate, delivery_rate, snd_ssthresh, cc_algo
 ```
 
 ---
