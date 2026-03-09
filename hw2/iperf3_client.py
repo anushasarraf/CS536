@@ -3,7 +3,7 @@
 CS 536 Assignment 2 - Part 1: iPerf Throughput Application
 
 Usage:
-    python3 iperf3_client.py [--n N] [--duration D] [--interval I] [--servers FILE] [--outdir DIR] [--cc CC]
+    python3 iperf3_client.py [--n N] [--duration D] [--interval I] [--servers FILE] [--outdir DIR] [--cc CC] [--seed S] [--no-shuffle]
 """
 
 import socket
@@ -462,7 +462,13 @@ def main():
     parser.add_argument('--servers',  type=str,   default=None,    help='servers.txt file path')
     parser.add_argument('--outdir',   type=str,   default=None, help='Output directory')
     parser.add_argument('--cc',       type=str,   default=None,    help='TCP congestion control algorithm (e.g., cubic, bbr, mycc)')
+    parser.add_argument('--seed',     type=int,   default=None,    help='Random seed for deterministic server/port selection')
+    parser.add_argument('--no-shuffle', action='store_true',        help='Do not shuffle server order')
     args = parser.parse_args()
+
+    if args.seed is not None:
+        random.seed(args.seed)
+        print(f"Using random seed: {args.seed}")
 
     if args.outdir is None:
         args.outdir = f"results/results_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -479,10 +485,13 @@ def main():
     if not candidates:
         print("ERROR: No servers available."); sys.exit(1)
 
-    random.shuffle(candidates)
+    if not args.no_shuffle:
+        random.shuffle(candidates)
+    else:
+        print("Server order shuffle disabled (--no-shuffle)")
 
     cc_label = args.cc if args.cc else "system-default"
-    print(f"\nStarting tests: n={args.n}, duration={args.duration}s, interval={args.interval}s, cc={cc_label}\n")
+    print(f"\nStarting tests: n={args.n}, duration={args.duration}s, interval={args.interval}s, cc={cc_label}, no_shuffle={args.no_shuffle}\n")
 
     all_samples = []
     tested = 0
