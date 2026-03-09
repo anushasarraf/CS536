@@ -523,7 +523,8 @@ def main():
         make_plots(all_samples, args.outdir)
         plot_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plot_tcp_stats.py")
         if os.path.exists(plot_script):
-            os.system(f"python3 {plot_script} --csv {os.path.join(args.outdir, 'q2_goodput_samples.csv')} --outdir {args.outdir}")
+            # os.system(f"python3 {plot_script} --csv {os.path.join(args.outdir, 'q2_goodput_samples.csv')} --outdir {args.outdir}")
+            os.system(f"{sys.executable} {plot_script} --csv {os.path.join(args.outdir, 'q2_goodput_samples.csv')} --outdir {args.outdir}")
         else:
             print("plot_tcp_stats.py not found — skipping extra plots")
     else:
