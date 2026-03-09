@@ -66,7 +66,7 @@ python3 plot_tcp_stats.py --csv results/results_YYYYMMDD_HHMMSS/goodput_samples.
 | `--interval` | 1.0 | Goodput sampling interval (seconds) |
 | `--servers` | (built-in list) | Path to server list file |
 | `--outdir` | `results/results_YYYYMMDD_HHMMSS/` | Output directory |
-| `--cc` | (system default) | TCP congestion control algorithm (e.g., `cubic`, `bbr`, `mycc`) |
+| `--cc` | (system default) | TCP congestion control algorithm (e.g., `cubic`, `reno`, `mycc`) |
 
 ### `plot_tcp_stats.py`
 
