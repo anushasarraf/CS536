@@ -19,10 +19,7 @@ V0 = baseline RTT variance (approx, from uncongested periods)
 
 Update rule:
 if Lt > 0:           W <- floor(W * 0.5)
-else if Rt > 1.5R0 and Vt > 2V0:  W <- floor(W * 0.8)
-else if Rt > 1.25R0: W <- floor(W * 0.9)
-else if Gt < Gmin:   hold
-else:                W <- W + 1
+else:                grow cwnd per ACK using Reno additive increase
 */
 
 struct mycc {
@@ -32,6 +29,7 @@ struct mycc {
 	u32 prev_total_retrans; // last total_retrans snapshot
 	unsigned long next_update_jiffies;
 	u32 interval_ms;        // sampling interval
+	bool allow_increase;    // enable ACK-driven Reno-style cwnd growth
 };
 
 static inline u32 mycc_clamp_cwnd(u32 cwnd)
@@ -40,6 +38,23 @@ static inline u32 mycc_clamp_cwnd(u32 cwnd)
 	if (cwnd < 2) return 2;
 	if (cwnd > 1000000) return 1000000;
 	return cwnd;
+}
+
+static void mycc_ack_driven_increase(struct sock *sk, const struct rate_sample *rs)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+	u32 acked;
+
+	if (!rs || !rs->acked_sacked)
+		return;
+	if (!tcp_is_cwnd_limited(sk))
+		return;
+
+	acked = rs->acked_sacked;
+	if (tcp_in_slow_start(tp))
+		acked = tcp_slow_start(tp, acked);
+	if (acked)
+		tcp_cong_avoid_ai(tp, tcp_snd_cwnd(tp), acked);
 }
 
 static void mycc_init(struct sock *sk)
@@ -55,6 +70,7 @@ static void mycc_init(struct sock *sk)
 
 	ca->g_peak_Bps = 0;
 	ca->prev_total_retrans = tp->total_retrans;
+	ca->allow_increase = true;
 
 	ca->interval_ms = 100; // you can tune this
 	ca->next_update_jiffies = jiffies + msecs_to_jiffies(ca->interval_ms);
@@ -84,6 +100,10 @@ static void mycc_cong_control(struct sock *sk, const struct rate_sample *rs)
 			ca->g_peak_Bps = gt_Bps;
 	}
 
+	// ACK-driven increase in Reno style, enabled only when interval logic allows it.
+	if (ca->allow_increase)
+		mycc_ack_driven_increase(sk, rs);
+
 	// Only update once per interval
 	if (time_before(jiffies, ca->next_update_jiffies))
 		return;
@@ -97,14 +117,6 @@ static void mycc_cong_control(struct sock *sk, const struct rate_sample *rs)
 
 		u32 W = tp->snd_cwnd;
 
-		// Compute Gmin and current estimated throughput
-		u64 gmin_Bps = (ca->g_peak_Bps * 80) / 100;
-		u64 gt_Bps = 0;
-		if (rs && rs->delivered > 0 && rs->interval_us > 0) {
-			u64 num = (u64)rs->delivered * (u64)max_t(u32, tp->mss_cache, 1) * 1000000ULL;
-			gt_Bps = div64_u64(num, (u64)rs->interval_us);
-		}
-
 		// Update V0 from "good" periods (heuristic):
 		// If no loss and RTT not inflated too much, allow v0 to shrink.
 		if (lt == 0 && srtt_us <= (ca->r0_us * 110) / 100) {
@@ -116,16 +128,23 @@ static void mycc_cong_control(struct sock *sk, const struct rate_sample *rs)
 		// Apply rule order
 		if (lt > 0) {
 			W = (W * 50) / 100;
-		} else if (srtt_us > (ca->r0_us * 150) / 100 &&
-		           rttvar_us > (ca->v0_us * 200) / 100) {
-			W = (W * 80) / 100;
-		} else if (srtt_us > (ca->r0_us * 125) / 100) {
-			W = (W * 90) / 100;
-		} else if (gmin_Bps > 0 && gt_Bps > 0 && gt_Bps < gmin_Bps) {
-			// hold
-			W = W;
+			ca->allow_increase = false;
 		} else {
-			W = W + 1;
+			/*
+			 * Disabled per request:
+			 * else if (srtt_us > (ca->r0_us * 150) / 100 &&
+			 *          rttvar_us > (ca->v0_us * 200) / 100) {
+			 *     W = (W * 80) / 100;
+			 *     ca->allow_increase = false;
+			 * } else if (srtt_us > (ca->r0_us * 125) / 100) {
+			 *     W = (W * 90) / 100;
+			 *     ca->allow_increase = false;
+			 * } else if (gmin_Bps > 0 && gt_Bps > 0 && gt_Bps < gmin_Bps) {
+			 *     ca->allow_increase = false; // hold
+			 * }
+			 */
+			// No direct cwnd bump here: growth is ACK-driven (Reno-like).
+			ca->allow_increase = true;
 		}
 
 		tp->snd_cwnd = mycc_clamp_cwnd(W);
