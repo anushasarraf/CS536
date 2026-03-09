@@ -3,40 +3,32 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/types.h>
-#include <linux/jiffies.h>
 #include <net/tcp.h>
 #include <net/inet_connection_sock.h>
 
 #define MYCC_NAME "mycc"
 
 /*
-Algorithm (per sampling interval):
-Let Wt = snd_cwnd
-Rt = srtt_ms, Vt = rttvar_ms, Lt = delta_total_retrans, Gt = delivery_mbps
-R0 = min RTT observed so far
-Gmin = 0.8 * peak delivery rate observed so far
-V0 = baseline RTT variance (approx, from uncongested periods)
-
-Update rule:
-if Lt > 0:           W <- floor(W * 0.5)
-else:                grow cwnd per ACK using Reno additive increase
+Algorithm:
+- ACK path: Reno-style slow start + additive increase.
+- Loss path: Reno-style multiplicative decrease through ssthresh callback.
+- Keep RTT/rate observations for future tuning, but do not gate cwnd changes on
+  a sampling interval.
 */
 
 struct mycc {
 	u32 r0_us;              // min srtt seen
 	u32 v0_us;              // baseline rttvar (best seen in "good" periods)
 	u64 g_peak_Bps;         // peak delivery rate bytes/sec
-	u32 prev_total_retrans; // last total_retrans snapshot
-	unsigned long next_update_jiffies;
-	u32 interval_ms;        // sampling interval
-	bool allow_increase;    // enable ACK-driven Reno-style cwnd growth
+	u32 prev_total_retrans; // last retrans snapshot (for Lt)
 };
 
 static inline u32 mycc_clamp_cwnd(u32 cwnd)
 {
-	// cwnd must be at least 2 in Linux TCP
-	if (cwnd < 2) return 2;
-	if (cwnd > 1000000) return 1000000;
+	if (cwnd < 2)
+		return 2;
+	if (cwnd > 1000000)
+		return 1000000;
 	return cwnd;
 }
 
@@ -70,16 +62,15 @@ static void mycc_init(struct sock *sk)
 
 	ca->g_peak_Bps = 0;
 	ca->prev_total_retrans = tp->total_retrans;
-	ca->allow_increase = true;
-
-	ca->interval_ms = 100; // you can tune this
-	ca->next_update_jiffies = jiffies + msecs_to_jiffies(ca->interval_ms);
 }
 
 static void mycc_cong_control(struct sock *sk, const struct rate_sample *rs)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct mycc *ca = inet_csk_ca(sk);
+	u64 gt_Bps = 0, gmin_Bps;
+	u32 lt;
+	u32 cwnd;
 
 	u32 srtt_us = (tp->srtt_us >> 3);
 	u32 rttvar_us = tp->rttvar_us;
@@ -90,71 +81,63 @@ static void mycc_cong_control(struct sock *sk, const struct rate_sample *rs)
 
 	// Estimate goodput from rate_sample in kernels where delivery_rate is absent.
 	// delivered is packets over interval_us, so convert to bytes/sec via MSS.
-	{
-		u64 gt_Bps = 0;
-		if (rs && rs->delivered > 0 && rs->interval_us > 0) {
-			u64 num = (u64)rs->delivered * (u64)max_t(u32, tp->mss_cache, 1) * 1000000ULL;
-			gt_Bps = div64_u64(num, (u64)rs->interval_us);
-		}
-		if (gt_Bps > ca->g_peak_Bps)
-			ca->g_peak_Bps = gt_Bps;
+	if (rs && rs->delivered > 0 && rs->interval_us > 0) {
+		u64 num = (u64)rs->delivered * (u64)max_t(u32, tp->mss_cache, 1) * 1000000ULL;
+		gt_Bps = div64_u64(num, (u64)rs->interval_us);
 	}
+	if (gt_Bps > ca->g_peak_Bps)
+		ca->g_peak_Bps = gt_Bps;
+	gmin_Bps = (ca->g_peak_Bps * 80ULL) / 100ULL;
 
-	// ACK-driven increase in Reno style, enabled only when interval logic allows it.
-	if (ca->allow_increase)
-		mycc_ack_driven_increase(sk, rs);
+	lt = tp->total_retrans - ca->prev_total_retrans;
+	ca->prev_total_retrans = tp->total_retrans;
+	cwnd = tp->snd_cwnd;
 
-	// Only update once per interval
-	if (time_before(jiffies, ca->next_update_jiffies))
-		return;
-	ca->next_update_jiffies = jiffies + msecs_to_jiffies(ca->interval_ms);
-
-	// Lt: new retrans since last interval
-	{
-		u32 tot = tp->total_retrans;
-		u32 lt = tot - ca->prev_total_retrans;
-		ca->prev_total_retrans = tot;
-
-		u32 W = tp->snd_cwnd;
-
-		// Update V0 from "good" periods (heuristic):
-		// If no loss and RTT not inflated too much, allow v0 to shrink.
-		if (lt == 0 && srtt_us <= (ca->r0_us * 110) / 100) {
-			if (rttvar_us > 0 && rttvar_us < ca->v0_us)
-				ca->v0_us = rttvar_us;
-		}
-		if (ca->v0_us == 0) ca->v0_us = 1;
-
-		// Apply rule order
-		if (lt > 0) {
-			W = (W * 50) / 100;
-			ca->allow_increase = false;
-		} else {
-			/*
-			 * Disabled per request:
-			 * else if (srtt_us > (ca->r0_us * 150) / 100 &&
-			 *          rttvar_us > (ca->v0_us * 200) / 100) {
-			 *     W = (W * 80) / 100;
-			 *     ca->allow_increase = false;
-			 * } else if (srtt_us > (ca->r0_us * 125) / 100) {
-			 *     W = (W * 90) / 100;
-			 *     ca->allow_increase = false;
-			 * } else if (gmin_Bps > 0 && gt_Bps > 0 && gt_Bps < gmin_Bps) {
-			 *     ca->allow_increase = false; // hold
-			 * }
-			 */
-			// No direct cwnd bump here: growth is ACK-driven (Reno-like).
-			ca->allow_increase = true;
-		}
-
-		tp->snd_cwnd = mycc_clamp_cwnd(W);
+	// Track best rttvar only during low-queue periods.
+	if (srtt_us > 0 && srtt_us <= (ca->r0_us * 110) / 100) {
+		if (rttvar_us > 0 && rttvar_us < ca->v0_us)
+			ca->v0_us = rttvar_us;
 	}
+	if (ca->v0_us == 0) ca->v0_us = 1;
+
+	/*
+	 * Rule cascade from Eq. (5):
+	 * 1) Lt > 0                       => W <- floor(W * 0.5)
+	 * 2) Rt > 1.5*R0 && Vt > 2*V0     => W <- floor(W * 0.8)
+	 * 3) Rt > 1.25*R0                 => W <- floor(W * 0.9)
+	 * 4) Gt < Gmin                    => hold W
+	 * 5) otherwise                    => additive increase
+	 */
+	
+	// halving cwnd is already done in mycc_ssthresh
+	// if (lt > 0) {
+	// 	cwnd = (cwnd * 50U) / 100U;
+	// 	tp->snd_cwnd = mycc_clamp_cwnd(cwnd);
+	// 	return;
+	// }
+
+	// if (srtt_us > (ca->r0_us * 150U) / 100U &&
+	//     rttvar_us > (ca->v0_us * 200U) / 100U) {
+	// 	cwnd = (cwnd * 80U) / 100U;
+	// 	tp->snd_cwnd = mycc_clamp_cwnd(cwnd);
+	// 	return;
+	// }
+
+	// if (srtt_us > (ca->r0_us * 125U) / 100U) {
+	// 	cwnd = (cwnd * 90U) / 100U;
+	// 	tp->snd_cwnd = mycc_clamp_cwnd(cwnd);
+	// 	return;
+	// }
+
+	// if (gmin_Bps > 0 && gt_Bps > 0 && gt_Bps < gmin_Bps)
+	// 	return; // hold
+
+	mycc_ack_driven_increase(sk, rs);
 }
 
 static u32 mycc_ssthresh(struct sock *sk)
 {
-	// Keep Linux behavior simple: on loss, tcp will call ssthresh.
-	// Our main logic already halves cwnd based on Lt, but this is still used by core TCP.
+	// Reno-style multiplicative decrease on loss events.
 	const struct tcp_sock *tp = tcp_sk(sk);
 	return max(tp->snd_cwnd >> 1U, 2U);
 }
