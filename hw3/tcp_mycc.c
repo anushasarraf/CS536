@@ -3,10 +3,32 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/types.h>
+#include <linux/moduleparam.h>
 #include <net/tcp.h>
 #include <net/inet_connection_sock.h>
 
 #define MYCC_NAME "mycc"
+
+/*
+ * Per-rule toggles for quick A/B testing.
+ * Set at module load time, e.g.:
+ *   insmod tcp_mycc.ko enable_severe=1 enable_mild=0 enable_lowrate=0
+ */
+static bool enable_loss_hold = true;
+module_param(enable_loss_hold, bool, 0644);
+MODULE_PARM_DESC(enable_loss_hold, "Hold growth on Lt>0 (loss seen since last callback)");
+
+static bool enable_severe = true;
+module_param(enable_severe, bool, 0644);
+MODULE_PARM_DESC(enable_severe, "Enable severe RTT+jitter rule");
+
+static bool enable_mild = false;
+module_param(enable_mild, bool, 0644);
+MODULE_PARM_DESC(enable_mild, "Enable mild RTT inflation rule");
+
+static bool enable_lowrate = false;
+module_param(enable_lowrate, bool, 0644);
+MODULE_PARM_DESC(enable_lowrate, "Enable low delivery-rate rule");
 
 /*
 Algorithm:
@@ -19,8 +41,12 @@ Algorithm:
 struct mycc {
 	u32 r0_us;              // min srtt seen
 	u32 v0_us;              // baseline rttvar (best seen in "good" periods)
-	u64 g_peak_Bps;         // peak delivery rate bytes/sec
+	u64 g_ref_Bps;          // decaying delivery-rate baseline (bytes/sec)
 	u32 prev_total_retrans; // last retrans snapshot (for Lt)
+	u32 severe_persist_us;  // persistence timer for severe queue signal
+	u32 mild_persist_us;    // persistence timer for mild RTT signal
+	u32 lowrate_persist_us; // persistence timer for low delivery signal
+	u32 reduce_cooldown_us; // cooldown after a cwnd reduction
 };
 
 static inline u32 mycc_clamp_cwnd(u32 cwnd)
@@ -60,8 +86,12 @@ static void mycc_init(struct sock *sk)
 	ca->v0_us = tp->rttvar_us;
 	if (ca->v0_us == 0) ca->v0_us = 1;
 
-	ca->g_peak_Bps = 0;
+	ca->g_ref_Bps = 0;
 	ca->prev_total_retrans = tp->total_retrans;
+	ca->severe_persist_us = 0;
+	ca->mild_persist_us = 0;
+	ca->lowrate_persist_us = 0;
+	ca->reduce_cooldown_us = 0;
 }
 
 static void mycc_cong_control(struct sock *sk, const struct rate_sample *rs)
@@ -71,6 +101,13 @@ static void mycc_cong_control(struct sock *sk, const struct rate_sample *rs)
 	u64 gt_Bps = 0, gmin_Bps;
 	u32 lt;
 	u32 cwnd;
+	u32 sample_us;
+	u32 severe_persist_target_us;
+	u32 soft_persist_target_us;
+	u32 cooldown_target_us;
+	bool severe_queue;
+	bool mild_rtt;
+	bool low_rate;
 
 	u32 srtt_us = (tp->srtt_us >> 3);
 	u32 rttvar_us = tp->rttvar_us;
@@ -85,13 +122,32 @@ static void mycc_cong_control(struct sock *sk, const struct rate_sample *rs)
 		u64 num = (u64)rs->delivered * (u64)max_t(u32, tp->mss_cache, 1) * 1000000ULL;
 		gt_Bps = div64_u64(num, (u64)rs->interval_us);
 	}
-	if (gt_Bps > ca->g_peak_Bps)
-		ca->g_peak_Bps = gt_Bps;
-	gmin_Bps = (ca->g_peak_Bps * 80ULL) / 100ULL;
+
+	/*
+	 * Decaying throughput baseline:
+	 * - rise relatively quickly when path improves
+	 * - decay slowly when path degrades
+	 */
+	if (gt_Bps > 0) {
+		if (ca->g_ref_Bps == 0) {
+			ca->g_ref_Bps = gt_Bps;
+		} else if (gt_Bps >= ca->g_ref_Bps) {
+			ca->g_ref_Bps = ((ca->g_ref_Bps * 7ULL) + gt_Bps) / 8ULL;
+		} else {
+			ca->g_ref_Bps = ((ca->g_ref_Bps * 31ULL) + gt_Bps) / 32ULL;
+		}
+	}
+	gmin_Bps = (ca->g_ref_Bps * 65ULL) / 100ULL;
 
 	lt = tp->total_retrans - ca->prev_total_retrans;
 	ca->prev_total_retrans = tp->total_retrans;
 	cwnd = tp->snd_cwnd;
+	sample_us = (rs && rs->interval_us > 0) ? (u32)min_t(long, rs->interval_us, (long)~0U) : 0U;
+	if (sample_us == 0)
+		sample_us = max(srtt_us / 8U, 1000U);
+	severe_persist_target_us = max(srtt_us, 4000U);   // ~= 1 RTT, floor at 4ms
+	soft_persist_target_us = max_t(u32, (u32)min_t(u64, (u64)srtt_us * 3ULL, (u64)~0U), 12000U); // ~= 3 RTT, floor at 12ms
+	cooldown_target_us = max_t(u32, (u32)min_t(u64, (u64)srtt_us * 2ULL, (u64)~0U), 10000U); // ~= 2 RTT, floor at 10ms
 
 	// Track best rttvar only during low-queue periods.
 	if (srtt_us > 0 && srtt_us <= (ca->r0_us * 110) / 100) {
@@ -100,37 +156,66 @@ static void mycc_cong_control(struct sock *sk, const struct rate_sample *rs)
 	}
 	if (ca->v0_us == 0) ca->v0_us = 1;
 
+	if (ca->reduce_cooldown_us > sample_us)
+		ca->reduce_cooldown_us -= sample_us;
+	else
+		ca->reduce_cooldown_us = 0;
+
 	/*
-	 * Rule cascade from Eq. (5):
-	 * 1) Lt > 0                       => W <- floor(W * 0.5)
-	 * 2) Rt > 1.5*R0 && Vt > 2*V0     => W <- floor(W * 0.8)
-	 * 3) Rt > 1.25*R0                 => W <- floor(W * 0.9)
-	 * 4) Gt < Gmin                    => hold W
-	 * 5) otherwise                    => additive increase
+	 * Soft control policy:
+	 * - loss (Lt>0) relies on ssthresh logic in TCP core
+	 * - delay/rate signals hold growth first
+	 * - reduce only after persistence and when not in cooldown
 	 */
-	
-	// halving cwnd is already done in mycc_ssthresh
-	// if (lt > 0) {
-	// 	cwnd = (cwnd * 50U) / 100U;
-	// 	tp->snd_cwnd = mycc_clamp_cwnd(cwnd);
-	// 	return;
-	// }
+	if (enable_loss_hold && lt > 0) {
+		ca->severe_persist_us = 0;
+		ca->mild_persist_us = 0;
+		ca->lowrate_persist_us = 0;
+		return;
+	}
 
-	// if (srtt_us > (ca->r0_us * 150U) / 100U &&
-	//     rttvar_us > (ca->v0_us * 200U) / 100U) {
-	// 	cwnd = (cwnd * 80U) / 100U;
-	// 	tp->snd_cwnd = mycc_clamp_cwnd(cwnd);
-	// 	return;
-	// }
+	severe_queue = (srtt_us > (ca->r0_us * 150U) / 100U) &&
+		       (rttvar_us > (ca->v0_us * 200U) / 100U);
+	mild_rtt = (srtt_us > (ca->r0_us * 140U) / 100U);
+	low_rate = (gmin_Bps > 0 && gt_Bps > 0 && gt_Bps < gmin_Bps);
 
-	// if (srtt_us > (ca->r0_us * 125U) / 100U) {
-	// 	cwnd = (cwnd * 90U) / 100U;
-	// 	tp->snd_cwnd = mycc_clamp_cwnd(cwnd);
-	// 	return;
-	// }
+	if (enable_severe && severe_queue) {
+		ca->severe_persist_us = min_t(u32, ca->severe_persist_us + sample_us, ~0U);
+		ca->mild_persist_us = 0;
+		ca->lowrate_persist_us = 0;
 
-	// if (gmin_Bps > 0 && gt_Bps > 0 && gt_Bps < gmin_Bps)
-	// 	return; // hold
+		if (ca->reduce_cooldown_us > 0 || ca->severe_persist_us < severe_persist_target_us)
+			return; // soft hold first
+
+		cwnd = (cwnd * 85U) / 100U;
+		tp->snd_cwnd = mycc_clamp_cwnd(cwnd);
+		ca->reduce_cooldown_us = cooldown_target_us;
+		ca->severe_persist_us = 0;
+		return;
+	}
+	ca->severe_persist_us = 0;
+
+	if (enable_mild && mild_rtt) {
+		ca->mild_persist_us = min_t(u32, ca->mild_persist_us + sample_us, ~0U);
+		ca->lowrate_persist_us = 0;
+
+		if (ca->reduce_cooldown_us > 0)
+			return;
+		if (ca->mild_persist_us >= soft_persist_target_us)
+			return; // hold only after sustained mild inflation
+	} else {
+		ca->mild_persist_us = 0;
+	}
+
+	if (enable_lowrate && low_rate) {
+		ca->lowrate_persist_us = min_t(u32, ca->lowrate_persist_us + sample_us, ~0U);
+		if (ca->reduce_cooldown_us > 0)
+			return;
+		if (ca->lowrate_persist_us >= soft_persist_target_us)
+			return; // hold only after sustained low delivery
+	} else {
+		ca->lowrate_persist_us = 0;
+	}
 
 	mycc_ack_driven_increase(sk, rs);
 }
