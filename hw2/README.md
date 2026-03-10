@@ -1,5 +1,7 @@
 # CS 536 Assignment 2 — iPerf Throughput & TCP Stats
 
+> For the full project README covering both HW2 and HW3, see [../README.md](../README.md).
+
 ## Overview
 
 A from-scratch Python TCP client that implements the **iperf3 protocol**, connects to public iperf3 servers, measures goodput using `TCP_INFO`, extracts TCP statistics, and generates all required plots.
@@ -10,6 +12,9 @@ A from-scratch Python TCP client that implements the **iperf3 protocol**, connec
 |------|---------|
 | `iperf3_client.py` | Main client — iperf3 protocol, measurement, Q1 plotting |
 | `plot_tcp_stats.py` | Q2(b) — TCP stats visualization (time-series + scatter plots) |
+| `plot_comparison.py` | Multi-algorithm comparison plots (45 s ablation) |
+| `plot_comparison_10s.py` | 10 s multi-run comparison (mycc_all × 3 runs) |
+| `ML_model.py` | Ridge regression cwnd predictor (Q3) |
 | `servers.txt` | Server list from https://iperf3serverlist.net/ |
 | `run_experiment.sh` | One-shot experiment runner |
 | `Dockerfile` | Containerized environment (Ubuntu 24.04) |
