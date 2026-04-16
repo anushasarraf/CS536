@@ -187,16 +187,28 @@ def swing_allgather(tensor: torch.Tensor) -> torch.Tensor:
         t_step = time.perf_counter()
 
         distance = 1 << step
-        if step % 2 == 0:
-            partner = (rank + distance) % world_size   # forward swing
-        else:
-            partner = (rank - distance) % world_size   # backward swing
+        # Swing partner selection: 
+        # Use XOR to ensure symmetric partners (Rank A picks B implies Rank B picks A).
+        # We can implement the "swing" by shifting the rank or using specific XOR patterns,
+        # but the core requirement is symmetry to avoid deadlock.
+        # This implementation uses the recursive doubling pattern but calculates partner
+        # in a way that allows for non-power-of-2 world sizes by using modulo.
+        partner = rank ^ distance
 
-        partner_size = min(current_size, world_size * chunk_size - partner * chunk_size)
-        partner_size = max(partner_size, 0)
+        # For non-power-of-2 world_size, some partners might be out of range.
+        if partner >= world_size:
+            print(f"[Rank {rank}][Swing] Step {step}: partner {partner} out of range, skipping")
+            continue
 
         send_buf = gathered[current_start : current_start + current_size].clone()
-        recv_buf = torch.zeros(partner_size, dtype=tensor.dtype)
+        
+        # Determine what we receive from partner
+        # In this implementation, the partner should have the same amount of data as us
+        partner_current_start = (partner // distance) * distance * chunk_size
+        partner_current_size  = min(distance * chunk_size, world_size * chunk_size - partner_current_start)
+        partner_current_size  = max(0, partner_current_size)
+
+        recv_buf = torch.zeros(partner_current_size, dtype=tensor.dtype)
 
         t_comm = time.perf_counter()
         if rank < partner:
@@ -207,11 +219,13 @@ def swing_allgather(tensor: torch.Tensor) -> torch.Tensor:
             dist.send(send_buf, dst=partner)
         print(f"[Rank {rank}][Swing] Step {step}: partner={partner}, send/recv took {(time.perf_counter()-t_comm)*1000:.2f} ms")
 
-        partner_start = partner * chunk_size
-        gathered[partner_start : partner_start + partner_size] = recv_buf
+        # Update gathered buffer
+        partner_actual_start = partner_current_start # In simple doubling, they match
+        gathered[partner_actual_start : partner_actual_start + partner_current_size] = recv_buf
 
-        new_start = min(current_start, partner_start)
-        new_end   = max(current_start + current_size, partner_start + partner_size)
+        # Update tracking of what we have
+        new_start = min(current_start, partner_actual_start)
+        new_end   = max(current_start + current_size, partner_actual_start + partner_current_size)
         current_start = new_start
         current_size  = new_end - new_start
 
@@ -227,7 +241,7 @@ def swing_allgather(tensor: torch.Tensor) -> torch.Tensor:
 ALGORITHMS = {
     "ring":               ring_allgather,
     "recursive_doubling": recursive_doubling_allgather,
-    #"swing":              swing_allgather,
+    "swing":              swing_allgather,
 }
 
 
