@@ -49,7 +49,7 @@ PORT = 29500
 ALGORITHMS = {
     "Ring":               ring_allgather,
     "Recursive Doubling": recursive_doubling_allgather,
-    #"Swing":              swing_allgather,
+    "Swing":              swing_allgather,
 }
 
 # =============================================================================

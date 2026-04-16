@@ -62,27 +62,23 @@ def binary_tree_broadcast(tensor: torch.Tensor, src: int = 0) -> torch.Tensor:
     # Remap so that src acts as virtual rank 0
     vrank = (rank - src) % world_size
 
-    num_steps = math.ceil(math.log2(world_size)) if world_size > 1 else 0
+    if vrank > 0:
+        # I am a receiver — receive from my parent
+        parent_vrank = (vrank - 1) // 2
+        parent_rank  = (parent_vrank + src) % world_size
+        dist.recv(tensor, src=parent_rank)
 
-    for step in range(num_steps):
-        # At each step, all ranks with vrank < 2^step that received data
-        # send to their child at vrank + 2^step (if that child exists).
-        distance = 1 << step   # 2^step
+    # I am a sender — send to my left child
+    left_vrank = 2 * vrank + 1
+    if left_vrank < world_size:
+        left_rank = (left_vrank + src) % world_size
+        dist.send(tensor.clone(), dst=left_rank)
 
-        if vrank < distance:
-            # I am a sender this step
-            child_vrank = vrank + distance
-            if child_vrank < world_size:
-                child_rank = (child_vrank + src) % world_size
-                dist.send(tensor.clone(), dst=child_rank)
-
-        elif vrank < 2 * distance:
-            # I am a receiver this step — receive from my parent
-            parent_vrank = vrank - distance
-            parent_rank  = (parent_vrank + src) % world_size
-            dist.recv(tensor, src=parent_rank)
-
-        # Ranks with vrank >= 2*distance do nothing this step yet
+    # I am a sender — send to my right child
+    right_vrank = 2 * vrank + 2
+    if right_vrank < world_size:
+        right_rank = (right_vrank + src) % world_size
+        dist.send(tensor.clone(), dst=right_rank)
 
     return tensor
 
@@ -131,10 +127,8 @@ def binomial_tree_broadcast(tensor: torch.Tensor, src: int = 0) -> torch.Tensor:
                 partner_rank = (partner_vrank + src) % world_size
                 dist.send(tensor.clone(), dst=partner_rank)
 
-        elif vrank == distance:
-            # I am the designated receiver this step
-            sender_vrank = 0  # in binomial tree, always receives from vrank=0... 
-            # ...actually from vrank - distance (my parent in this step)
+        elif distance <= vrank < 2 * distance:
+            # I am a receiver this step
             sender_vrank = vrank - distance
             sender_rank  = (sender_vrank + src) % world_size
             dist.recv(tensor, src=sender_rank)
