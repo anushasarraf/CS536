@@ -126,14 +126,27 @@ def recursive_doubling_allgather(tensor: torch.Tensor) -> torch.Tensor:
             dist.send(send_buf, dst=partner)
         print(f"[Rank {rank}][RecDouble] Step {step}: partner={partner}, send/recv took {(time.perf_counter()-t_comm)*1000:.2f} ms")
 
+        # partner_start = partner * chunk_size
+        # if partner_start < current_start:
+        #     gathered[partner_start : partner_start + current_size] = recv_buf
+        #     current_start = partner_start
+        # else:
+        #     gathered[current_start + current_size : current_start + 2 * current_size] = recv_buf
+
+        # current_size *= 2
         partner_start = partner * chunk_size
+        total_size    = world_size * chunk_size
+
         if partner_start < current_start:
-            gathered[partner_start : partner_start + current_size] = recv_buf
+            write_size = min(current_size, total_size - partner_start)
+            gathered[partner_start : partner_start + write_size] = recv_buf[:write_size]
             current_start = partner_start
         else:
-            gathered[current_start + current_size : current_start + 2 * current_size] = recv_buf
+            write_start = current_start + current_size
+            write_size  = min(current_size, total_size - write_start)
+            gathered[write_start : write_start + write_size] = recv_buf[:write_size]
 
-        current_size *= 2
+        current_size = min(current_size * 2, total_size - current_start)
         print(f"[Rank {rank}][RecDouble] Step {step}: total {(time.perf_counter()-t_step)*1000:.2f} ms")
 
     return gathered
@@ -214,7 +227,7 @@ def swing_allgather(tensor: torch.Tensor) -> torch.Tensor:
 ALGORITHMS = {
     "ring":               ring_allgather,
     "recursive_doubling": recursive_doubling_allgather,
-    "swing":              swing_allgather,
+    #"swing":              swing_allgather,
 }
 
 
