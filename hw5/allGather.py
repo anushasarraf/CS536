@@ -126,15 +126,10 @@ def recursive_doubling_allgather(tensor: torch.Tensor) -> torch.Tensor:
             dist.send(send_buf, dst=partner)
         print(f"[Rank {rank}][RecDouble] Step {step}: partner={partner}, send/recv took {(time.perf_counter()-t_comm)*1000:.2f} ms")
 
-        # partner_start = partner * chunk_size
-        # if partner_start < current_start:
-        #     gathered[partner_start : partner_start + current_size] = recv_buf
-        #     current_start = partner_start
-        # else:
-        #     gathered[current_start + current_size : current_start + 2 * current_size] = recv_buf
-
-        # current_size *= 2
-        partner_start = partner * chunk_size
+        # Partner's accumulated block starts at the distance-aligned floor of partner's rank.
+        # Using partner * chunk_size is wrong after step 0 because the partner has already
+        # gathered neighbors and its data no longer starts at its own index.
+        partner_start = ((partner >> step) << step) * chunk_size
         total_size    = world_size * chunk_size
 
         if partner_start < current_start:

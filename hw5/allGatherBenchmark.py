@@ -45,6 +45,7 @@ FIXED_MSG_BYTES  = 1024*1024  # 1MB, used in Plot 2
 N_REPEATS = 3
 
 PORT = 29500
+_port_counter = PORT  # incremented per measure() call to avoid TIME_WAIT conflicts
 
 ALGORITHMS = {
     "Ring":               ring_allgather,
@@ -88,11 +89,13 @@ def benchmark_worker(rank, world_size, algo_name, chunk_size, result_list, port)
     dist.destroy_process_group()
 
 
-def measure(algo_name, world_size, msg_bytes, port=PORT):
+def measure(algo_name, world_size, msg_bytes):
     """
     Spawn world_size processes, run the algorithm, return elapsed seconds.
     Returns None if the config is invalid (e.g. recursive doubling + non-pow2).
+    Each call uses a fresh port to avoid Windows TIME_WAIT socket conflicts.
     """
+    global _port_counter
     # Recursive doubling only works for power-of-2 world sizes
     if algo_name == "Recursive Doubling" and (world_size & (world_size - 1)) != 0:
         return None
@@ -101,6 +104,9 @@ def measure(algo_name, world_size, msg_bytes, port=PORT):
     chunk_size = msg_bytes // 4
     if chunk_size == 0:
         return None
+
+    _port_counter += 1
+    port = _port_counter
 
     manager = mp.Manager()
     result  = manager.list([None])
@@ -178,7 +184,7 @@ def plot_vs_message_size():
 
     path = "allgather_vs_msgsize.png"
     fig.savefig(path, dpi=150)
-    print(f"\n  Saved → {path}")
+    print(f"\n  Saved -> {path}")
     plt.close(fig)
 
 
@@ -194,7 +200,7 @@ def plot_vs_ranks():
     for world_size in RANK_COUNTS:
         print(f"  world_size={world_size}")
         for algo_name in ALGORITHMS:
-            t = measure(algo_name, world_size, FIXED_MSG_BYTES, port=PORT + 1)
+            t = measure(algo_name, world_size, FIXED_MSG_BYTES)
             if t is not None:
                 results[algo_name].append((world_size, t * 1000))  # ms
                 print(f"    {algo_name:22s}: {t*1000:.2f} ms")
@@ -234,7 +240,7 @@ def plot_vs_ranks():
 
     path = "allgather_vs_ranks.png"
     fig.savefig(path, dpi=150)
-    print(f"\n  Saved → {path}")
+    print(f"\n  Saved -> {path}")
     plt.close(fig)
 
 
@@ -243,7 +249,18 @@ def plot_vs_ranks():
 # =============================================================================
 
 if __name__ == "__main__":
-    # Required for mp.spawn on some platforms
+    import argparse as _ap
+    _parser = _ap.ArgumentParser()
+    _parser.add_argument("--algos", nargs="+", choices=list(ALGORITHMS.keys()),
+                         default=list(ALGORITHMS.keys()),
+                         help="Which algorithms to benchmark (default: all)")
+    _args = _parser.parse_args()
+
+    # Filter global ALGORITHMS dict to only requested ones
+    for _k in list(ALGORITHMS.keys()):
+        if _k not in _args.algos:
+            del ALGORITHMS[_k]
+
     mp.set_start_method("spawn", force=True)
 
     plot_vs_message_size()
